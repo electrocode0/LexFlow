@@ -1,38 +1,66 @@
-# LexFlow 
+# LexFlow
 
-LexFlow is an AI-assisted contract intelligence and legal operations platform. 
+LexFlow is an AI-assisted contract intelligence and legal operations platform.
 
-## Status 
+## Current milestone
 
-Currently under active development. 
+The Day 1 backend foundation now includes a tested contract and document domain API:
 
-### Day 1
+- FastAPI backend with Pydantic request and response models
+- PostgreSQL-backed contract and document persistence
+- Contract creation, listing, and detail endpoints
+- UTF-8 text document upload and listing endpoints
+- Transaction-safe database operations and database health monitoring
+- Docker Compose development environment
+- PostgreSQL schema initialized from `db/init.sql`
+- Pytest integration coverage for the API and database behavior
 
-- FastAPI backend 
-- PostgreSQL database 
-- Docker Compose development environment 
-- initial legal data model
-- database health monitoring 
+RAG, embeddings, LLM integration, authentication, and frontend work are intentionally deferred to later milestones.
 
-## Architecture 
+## Architecture
 
-FatAPI -> PostgreSQL 
+FastAPI -> PostgreSQL
 
-Future: 
+The next processing milestone will extend the document path with parsing, chunking, embeddings, and retrieval.
 
-Contract -> Parsing -> LLM Extraction -> RAG -> Policy Comparison 
--> Human Review -> Audit Trail 
+## API endpoints
 
-## Development 
+- `POST /contracts` creates a contract.
+- `GET /contracts` lists contracts.
+- `GET /contracts/{id}` returns one contract.
+- `POST /contracts/{id}/documents` uploads a UTF-8 text document.
+- `GET /contracts/{id}/documents` lists documents for a contract.
+- `GET /health` checks database connectivity.
 
-Start PostgreSQL: 
+## Development setup
 
-docker compose up -d
+Requirements: Docker Desktop and Python 3.12 or newer.
 
-Start API: 
+Create a clean PostgreSQL volume and start the services:
 
+```powershell
+docker compose down -v
+docker compose up -d --build
+```
+
+Install Python dependencies:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+```
+
+Run the API locally:
+
+```powershell
 uvicorn app.main:app --reload
+```
 
-API documentation: 
+Run the full test suite:
 
-http://127.0.0.1:8000/docs
+```powershell
+pytest -q
+```
+
+API documentation: http://127.0.0.1:8000/docs

@@ -1,4 +1,4 @@
-#LexFlow Architecture 
+# LexFlow Architecture
 
 Client 
  |
