@@ -4,7 +4,14 @@ import psycopg
 from fastapi import FastAPI, File, HTTPException, UploadFile, status
 
 from app.db import get_connection
-from app.models import ContractCreate, ContractResponse, DocumentResponse
+from app.embeddings import embedding_provider
+from app.ingestion import ingest_document, vector_literal
+from app.models import (
+    ContractCreate,
+    ContractResponse,
+    DocumentResponse,
+    SearchResult,
+)
 
 app = FastAPI(
     title="LexFlow API",
@@ -62,6 +69,46 @@ def list_contracts():
                     FROM contracts
                     ORDER BY created_at DESC
                     """
+                )
+                return cur.fetchall()
+    except psycopg.Error as exc:
+        raise database_error() from exc
+
+
+@app.get("/contracts/{contract_id}/search", response_model=list[SearchResult])
+def search_contract(contract_id: UUID, q: str, limit: int = 5):
+    query = q.strip()
+    if not query:
+        raise HTTPException(status_code=422, detail="Query must not be blank.")
+    if limit < 1 or limit > 50:
+        raise HTTPException(status_code=422, detail="Limit must be between 1 and 50.")
+
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                query_vector = vector_literal(embedding_provider.embed(query))
+                cur.execute("SELECT 1 FROM contracts WHERE id = %s", (contract_id,))
+                if cur.fetchone() is None:
+                    raise HTTPException(status_code=404, detail="Contract not found.")
+                cur.execute(
+                    """
+                          SELECT dc.id AS chunk_id, dc.document_id, d.file_name, d.mime_type,
+                              c.title AS contract_title, c.contract_type,
+                           dc.chunk_index, dc.text, dc.start_offset, dc.end_offset,
+                           1 - (dc.embedding <=> %s::vector) AS similarity
+                    FROM document_chunks AS dc
+                    JOIN documents AS d ON d.id = dc.document_id
+                          JOIN contracts AS c ON c.id = d.contract_id
+                          WHERE d.contract_id = %s
+                    ORDER BY dc.embedding <=> %s::vector
+                    LIMIT %s
+                    """,
+                    (
+                        query_vector,
+                        contract_id,
+                        query_vector,
+                        limit,
+                    ),
                 )
                 return cur.fetchall()
     except psycopg.Error as exc:
@@ -130,7 +177,9 @@ async def upload_document(contract_id: UUID, file: UploadFile = File(...)):
                     """,
                     (contract_id, file.filename.strip(), file.content_type, raw_text),
                 )
-                return cur.fetchone()
+                document = cur.fetchone()
+                ingest_document(conn, document["id"], raw_text, embedding_provider)
+                return document
     except psycopg.Error as exc:
         raise database_error() from exc
 

@@ -40,3 +40,17 @@ class DocumentResponse(BaseModel):
     storage_path: str | None
     raw_text: str | None
     created_at: datetime
+
+
+class SearchResult(BaseModel):
+    chunk_id: UUID
+    document_id: UUID
+    file_name: str
+    mime_type: str | None
+    contract_title: str
+    contract_type: str | None
+    chunk_index: int
+    text: str
+    start_offset: int
+    end_offset: int
+    similarity: float

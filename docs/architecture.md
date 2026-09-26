@@ -1,14 +1,14 @@
 # LexFlow Architecture
 
-Client 
+Client
  |
- | HTTP 
-🔽
+ | HTTP
+v
 FastAPI
- | 
- | SQL 
-🔽
-PostgreSQL 
+ |
+ | upload transaction: raw text -> chunks -> embeddings
+v
+PostgreSQL + pgvector
 
 Primary entities: 
 
@@ -17,22 +17,26 @@ Primary entities:
 - clauses 
 - reviews 
 - audit_events 
+- document_chunks
 
-Future processing pipeline: 
+Retrieval pipeline:
 
 Contract 
  | 
 🔽
-Document Parsing 
- | 
-🔽
-LLM Extraction 
+Document Upload
  |
-🔽
-RAG / Playbook Retrieval 
- | 
-🔽
-Deviation Analysis 
- | 
-🔽
-Human Review 
+v
+Chunking + Embeddings
+ |
+v
+Vector Retrieval
+ |
+v
+Current: Query -> HashEmbeddingProvider -> cosine search -> ranked source chunks
+
+Future: Retrieval -> LLM -> structured answer -> citations
+	Document Parsing -> LLM Extraction -> Deviation Analysis -> Human Review
+
+`EmbeddingProvider` is the boundary for replacing the deterministic local
+`HashEmbeddingProvider` with a model-backed implementation in a later milestone.
