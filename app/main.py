@@ -2,7 +2,10 @@ from uuid import UUID
 
 import psycopg
 from fastapi import FastAPI, File, HTTPException, UploadFile, status
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import ValidationError
 
+from app.config import CORS_ORIGINS
 from app.db import get_connection
 from app.embeddings import embedding_provider
 from app.ingestion import ingest_document, vector_literal
@@ -23,12 +26,18 @@ from app.models import (
     SearchResult,
 )
 from app.retrieval import ContractNotFoundError, retrieve_contract_chunks
-from pydantic import ValidationError
 
 app = FastAPI(
     title="LexFlow API",
     version="0.1.0",
     description="API for LexFlow, a contract intelligence platform.",
+)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=CORS_ORIGINS,
+    allow_credentials=False,
+    allow_methods=["GET", "POST"],
+    allow_headers=["*"],
 )
 
 MAX_DOCUMENT_BYTES = 10 * 1024 * 1024

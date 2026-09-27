@@ -16,12 +16,14 @@ The Day 1 backend foundation now includes a tested contract and document domain 
 - Contract-scoped source search with similarity scores and document metadata
 - Grounded contract Q&A with verified source citations
 - Vendor-independent LLM provider interface and OpenAI structured-output provider
+- React and TypeScript contract dashboard and workspace
+- Click-through source citations with highlighted backend-returned passages
 - Transaction-safe database operations and database health monitoring
 - Docker Compose development environment
 - PostgreSQL schema initialized from `db/init.sql`
 - Pytest integration coverage for the API and database behavior
 
-Authentication and frontend work are intentionally deferred to later milestones.
+Authentication is intentionally deferred to a later milestone.
 
 ## Architecture
 
@@ -48,6 +50,11 @@ The production provider uses OpenAI's structured JSON output. The current local
 hash embedding provider is deterministic token-overlap similarity, not a semantic
 language embedding model.
 
+The React frontend consumes the API directly. It creates and opens contracts,
+uploads `.txt` files, submits questions, and expands citations using the exact
+source text returned by the backend. It does not implement ingestion, retrieval,
+or citation validation itself.
+
 ## API endpoints
 
 - `POST /contracts` creates a contract.
@@ -62,9 +69,12 @@ language embedding model.
 ## Development setup
 
 Requirements: Docker Desktop and Python 3.12 or newer.
+The frontend requires Node.js 20.19 or newer and npm.
 
 Create `.env` from `.env.example`. Set `OPENAI_API_KEY` to enable live Q&A; do not
 commit `.env`. The deterministic tests use a fake LLM provider and need no API key.
+The default CORS allowlist includes the local Vite origins at `localhost:5173` and
+`127.0.0.1:5173`.
 
 The Compose database uses `pgvector/pgvector:pg16`. Recreate the volume after schema changes so the initialization script runs again.
 
@@ -87,6 +97,24 @@ Run the API locally:
 
 ```powershell
 uvicorn app.main:app --reload
+```
+
+Run the frontend in a second terminal:
+
+```powershell
+Set-Location frontend
+Copy-Item .env.example .env.local
+npm install
+npm run dev
+```
+
+Open http://127.0.0.1:5173. Set `VITE_API_BASE_URL` in `frontend/.env.local` to
+change the API origin. Frontend checks:
+
+```powershell
+npm run lint
+npm run typecheck
+npm run build
 ```
 
 Run the full test suite:

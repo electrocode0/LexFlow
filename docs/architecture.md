@@ -1,8 +1,8 @@
 # LexFlow Architecture
 
-Client
+React + TypeScript (Vite)
  |
- | HTTP
+ | HTTP / JSON / multipart
 v
 FastAPI
  |
@@ -48,6 +48,15 @@ the model to use only that context, treat document text as untrusted data, and s
 when evidence is insufficient. Prompting is defense in depth, not a formal guarantee.
 
 Future: Document Parsing -> LLM Extraction -> Deviation Analysis -> Human Review
+
+The frontend owns presentation and transient form state only. It uses typed API
+functions for contract creation/listing, document upload, and Q&A. Citation buttons
+expand the exact citation text returned by the API and visually mark it as verified
+source material; the frontend does not recreate or infer source passages.
+
+The backend permits the configured local frontend origins through `CORS_ORIGINS`.
+The Vite development server defaults to `http://127.0.0.1:5173`; set
+`VITE_API_BASE_URL` when the API is hosted elsewhere.
 
 `EmbeddingProvider` is the boundary for replacing the deterministic local
 `HashEmbeddingProvider` with a model-backed implementation in a later milestone.

@@ -10,3 +10,11 @@ LLM_PROVIDER = os.getenv("LLM_PROVIDER", "openai").strip().lower()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or None
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip()
 OPENAI_TIMEOUT_SECONDS = float(os.getenv("OPENAI_TIMEOUT_SECONDS", "30"))
+CORS_ORIGINS = [
+	origin.strip()
+	for origin in os.getenv(
+		"CORS_ORIGINS",
+		"http://localhost:5173,http://127.0.0.1:5173",
+	).split(",")
+	if origin.strip()
+]

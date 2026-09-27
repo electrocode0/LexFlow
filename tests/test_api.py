@@ -75,6 +75,19 @@ def test_contract_validation_and_not_found(client):
     )
 
 
+def test_cors_allows_local_vite_origin(client):
+    response = client.options(
+        "/contracts",
+        headers={
+            "Origin": "http://localhost:5173",
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://localhost:5173"
+
+
 def test_document_upload_and_listing(client):
     contract_id = client.post("/contracts", json={"title": "NDA"}).json()["id"]
     response = client.post(
