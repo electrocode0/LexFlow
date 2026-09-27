@@ -6,12 +6,24 @@ from fastapi import FastAPI, File, HTTPException, UploadFile, status
 from app.db import get_connection
 from app.embeddings import embedding_provider
 from app.ingestion import ingest_document, vector_literal
+from app.llm import (
+    LLMAnswer,
+    LLMNotConfiguredError,
+    LLMProviderError,
+    LLMTimeoutError,
+    RetrievedChunk,
+    llm_provider,
+)
 from app.models import (
+    AskRequest,
+    AskResponse,
     ContractCreate,
     ContractResponse,
     DocumentResponse,
     SearchResult,
 )
+from app.retrieval import ContractNotFoundError, retrieve_contract_chunks
+from pydantic import ValidationError
 
 app = FastAPI(
     title="LexFlow API",
@@ -85,34 +97,74 @@ def search_contract(contract_id: UUID, q: str, limit: int = 5):
 
     try:
         with get_connection() as conn:
-            with conn.cursor() as cur:
-                query_vector = vector_literal(embedding_provider.embed(query))
-                cur.execute("SELECT 1 FROM contracts WHERE id = %s", (contract_id,))
-                if cur.fetchone() is None:
-                    raise HTTPException(status_code=404, detail="Contract not found.")
-                cur.execute(
-                    """
-                          SELECT dc.id AS chunk_id, dc.document_id, d.file_name, d.mime_type,
-                              c.title AS contract_title, c.contract_type,
-                           dc.chunk_index, dc.text, dc.start_offset, dc.end_offset,
-                           1 - (dc.embedding <=> %s::vector) AS similarity
-                    FROM document_chunks AS dc
-                    JOIN documents AS d ON d.id = dc.document_id
-                          JOIN contracts AS c ON c.id = d.contract_id
-                          WHERE d.contract_id = %s
-                    ORDER BY dc.embedding <=> %s::vector
-                    LIMIT %s
-                    """,
-                    (
-                        query_vector,
-                        contract_id,
-                        query_vector,
-                        limit,
-                    ),
-                )
-                return cur.fetchall()
+            return retrieve_contract_chunks(conn, contract_id, query, limit)
+    except ContractNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Contract not found.") from exc
     except psycopg.Error as exc:
         raise database_error() from exc
+
+
+@app.post("/contracts/{contract_id}/ask", response_model=AskResponse)
+def ask_contract(contract_id: UUID, request: AskRequest):
+    try:
+        with get_connection() as conn:
+            chunks = retrieve_contract_chunks(
+                conn, contract_id, request.question, limit=5
+            )
+    except ContractNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Contract not found.") from exc
+    except psycopg.Error as exc:
+        raise database_error() from exc
+
+    context = [
+        RetrievedChunk(chunk_id=chunk["chunk_id"], text=chunk["text"])
+        for chunk in chunks
+    ]
+    try:
+        answer = LLMAnswer.model_validate(
+            llm_provider.generate(request.question, context)
+        )
+    except LLMNotConfiguredError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Language model provider is not configured.",
+        ) from exc
+    except (LLMTimeoutError, TimeoutError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="Language model request timed out.",
+        ) from exc
+    except (LLMProviderError, ValidationError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Language model returned an invalid response.",
+        ) from exc
+
+    chunks_by_id = {str(chunk["chunk_id"]): chunk for chunk in chunks}
+    citations = []
+    for citation_id in answer.citation_ids:
+        try:
+            normalized_id = str(UUID(citation_id))
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Language model cited an unknown source.",
+            ) from exc
+        chunk = chunks_by_id.get(normalized_id)
+        if chunk is None:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Language model cited an unknown source.",
+            )
+        citations.append(
+            {
+                "document_id": chunk["document_id"],
+                "chunk_id": chunk["chunk_id"],
+                "chunk_index": chunk["chunk_index"],
+                "text": chunk["text"],
+            }
+        )
+    return AskResponse(answer=answer.answer, citations=citations)
 
 
 @app.get("/contracts/{contract_id}", response_model=ContractResponse)

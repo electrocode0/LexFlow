@@ -5,3 +5,4 @@ python-dotenv
 python-multipart
 pytest
 httpx
+openai>=1.66,<3
