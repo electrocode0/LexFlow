@@ -1,4 +1,6 @@
 import json
+import hashlib
+import re
 import os
 from pathlib import Path
 from types import SimpleNamespace
@@ -16,7 +18,13 @@ from app.db import get_connection
 import app.main as main
 from app.main import app
 from app.chunking import chunk_text
+from app.embeddings import (
+    EmbeddingProviderError,
+    EmbeddingTimeoutError,
+    OpenAIEmbeddingProvider,
+)
 from app.ingestion import ingest_document
+import app.reindex_embeddings as reindex_embeddings
 from app.llm import (
     LLMAnswer,
     LLMNotConfiguredError,
@@ -24,6 +32,20 @@ from app.llm import (
     LLMTimeoutError,
     OpenAIProvider,
 )
+import app.retrieval as retrieval
+
+
+class DeterministicFakeEmbeddingProvider:
+    dimension = 1536
+    token_pattern = re.compile(r"[a-z0-9]+")
+
+    def embed(self, text):
+        vector = [0.0] * self.dimension
+        for token in self.token_pattern.findall(text.lower()):
+            index = int.from_bytes(hashlib.sha256(token.encode()).digest()[:4], "big")
+            vector[index % self.dimension] += 1.0
+        magnitude = sum(value * value for value in vector) ** 0.5
+        return [value / magnitude for value in vector] if magnitude else vector
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -36,7 +58,10 @@ def database():
 
 
 @pytest.fixture(autouse=True)
-def clean_database(database):
+def clean_database(database, monkeypatch):
+    fake_provider = DeterministicFakeEmbeddingProvider()
+    monkeypatch.setattr(main, "embedding_provider", fake_provider)
+    monkeypatch.setattr(retrieval, "embedding_provider", fake_provider)
     with get_connection() as connection:
         connection.execute(
             "TRUNCATE audit_events, clauses, documents, contracts CASCADE"
@@ -163,7 +188,7 @@ def test_ingestion_rolls_back_when_embedding_fails(client):
                 document_id = cursor.fetchone()["id"]
 
             class FailingProvider:
-                dimension = 128
+                dimension = 1536
 
                 def embed(self, text):
                     raise RuntimeError("embedding failed")
@@ -174,6 +199,69 @@ def test_ingestion_rolls_back_when_embedding_fails(client):
         assert connection.execute(
             "SELECT count(*) FROM documents WHERE file_name = 'broken.txt'"
         ).fetchone()["count"] == 0
+
+
+def test_upload_rolls_back_when_semantic_embedding_provider_fails(
+    client, monkeypatch
+):
+    contract_id = create_contract(client)
+
+    class FailingProvider:
+        dimension = 1536
+
+        def embed(self, text):
+            raise EmbeddingProviderError("embedding service failed")
+
+    monkeypatch.setattr(main, "embedding_provider", FailingProvider())
+    response = client.post(
+        f"/contracts/{contract_id}/documents",
+        files={"file": ("failed.txt", b"Source content", "text/plain")},
+    )
+
+    assert response.status_code == 502
+    with get_connection() as connection:
+        assert connection.execute(
+            "SELECT count(*) FROM documents WHERE file_name = 'failed.txt'"
+        ).fetchone()["count"] == 0
+
+
+def test_reindex_rebuilds_derived_chunks_from_preserved_document_text(
+    client, monkeypatch
+):
+    contract_id = create_contract(client)
+    document, old_chunks = upload_text_document(
+        client,
+        contract_id,
+        "Confidential information must be protected.\n\nThe agreement lasts three years.",
+        "reindex.txt",
+    )
+    monkeypatch.setattr(
+        reindex_embeddings,
+        "embedding_provider",
+        DeterministicFakeEmbeddingProvider(),
+    )
+
+    document_count, chunk_count = reindex_embeddings.reindex_documents()
+
+    assert document_count == 1
+    assert chunk_count == len(old_chunks)
+    with get_connection() as connection:
+        stored = connection.execute(
+            """
+            SELECT id, text, vector_dims(embedding) AS dimensions
+            FROM document_chunks WHERE document_id = %s ORDER BY chunk_index
+            """,
+            (document["id"],),
+        ).fetchall()
+        source = connection.execute(
+            "SELECT raw_text FROM documents WHERE id = %s", (document["id"],)
+        ).fetchone()["raw_text"]
+    assert source == "Confidential information must be protected.\n\nThe agreement lasts three years."
+    assert [chunk["text"] for chunk in stored] == [chunk["text"] for chunk in old_chunks]
+    assert all(chunk["dimensions"] == 1536 for chunk in stored)
+    assert {str(chunk["id"]) for chunk in stored}.isdisjoint(
+        {str(chunk["chunk_id"]) for chunk in old_chunks}
+    )
 
 
 def test_search_returns_sample_nda_supporting_passage(client):
@@ -380,6 +468,55 @@ def test_ask_hard_fails_hallucinated_citation_id(client, fake_llm):
 
     assert response.status_code == 502
     assert response.json()["detail"] == "Language model cited an unknown source."
+
+
+def test_openai_embedding_provider_requests_configured_model_and_dimensions():
+    response = SimpleNamespace(
+        data=[SimpleNamespace(embedding=[0.25] * 1536)],
+        usage=SimpleNamespace(prompt_tokens=3, total_tokens=3),
+    )
+
+    class FakeEmbeddings:
+        request = None
+
+        def create(self, **kwargs):
+            self.request = kwargs
+            return response
+
+    fake_embeddings = FakeEmbeddings()
+    provider = OpenAIEmbeddingProvider(
+        "test-key",
+        "text-embedding-3-small",
+        1,
+        client=SimpleNamespace(embeddings=fake_embeddings),
+    )
+
+    vector = provider.embed("semantic test")
+
+    assert len(vector) == 1536
+    assert fake_embeddings.request == {
+        "model": "text-embedding-3-small",
+        "input": "semantic test",
+        "dimensions": 1536,
+    }
+
+
+def test_openai_embedding_provider_rejects_dimension_mismatch():
+    provider = OpenAIEmbeddingProvider(
+        "test-key",
+        "text-embedding-3-small",
+        1,
+        client=SimpleNamespace(
+            embeddings=SimpleNamespace(
+                create=lambda **kwargs: SimpleNamespace(
+                    data=[SimpleNamespace(embedding=[0.0] * 128)]
+                )
+            )
+        ),
+    )
+
+    with pytest.raises(EmbeddingProviderError, match="Expected 1536"):
+        provider.embed("dimension check")
 
 
 @pytest.mark.parametrize(

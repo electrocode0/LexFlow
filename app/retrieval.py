@@ -2,7 +2,7 @@ from uuid import UUID
 
 from psycopg import Connection
 
-from app.embeddings import embedding_provider
+from app.embeddings import EmbeddingProvider, embedding_provider
 from app.ingestion import vector_literal
 
 
@@ -15,8 +15,9 @@ def retrieve_contract_chunks(
     contract_id: UUID,
     query: str,
     limit: int = 5,
+    provider: EmbeddingProvider | None = None,
 ) -> list[dict]:
-    query_vector = vector_literal(embedding_provider.embed(query))
+    query_vector = vector_literal((provider or embedding_provider).embed(query))
     with connection.cursor() as cursor:
         cursor.execute("SELECT 1 FROM contracts WHERE id = %s", (contract_id,))
         if cursor.fetchone() is None:

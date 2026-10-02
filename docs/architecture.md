@@ -33,7 +33,7 @@ v
 Vector Retrieval
  |
 v
-Current: Query -> HashEmbeddingProvider -> cosine search -> ranked source chunks
+Current: Query -> OpenAIEmbeddingProvider -> cosine search -> ranked source chunks
 
 Ask API:
 Question -> query embedding -> contract-scoped vector retrieval
@@ -58,5 +58,12 @@ The backend permits the configured local frontend origins through `CORS_ORIGINS`
 The Vite development server defaults to `http://127.0.0.1:5173`; set
 `VITE_API_BASE_URL` when the API is hosted elsewhere.
 
-`EmbeddingProvider` is the boundary for replacing the deterministic local
-`HashEmbeddingProvider` with a model-backed implementation in a later milestone.
+`EmbeddingProvider` uses the production `OpenAIEmbeddingProvider` with the configured
+`text-embedding-3-small` model and 1536-dimensional vectors. The schema dimension
+must match provider output. Automated tests inject deterministic fake embedding and
+LLM providers, so CI performs no paid model requests.
+
+The versioned migration from vector(128) to vector(1536) deletes only derived chunks
+and vectors. It preserves source documents, which `python -m app.reindex_embeddings`
+uses to regenerate chunk rows and embeddings. New databases receive the current
+dimension directly from `db/init.sql`.

@@ -1,31 +1,94 @@
-import hashlib
-import math
-import re
-from abc import ABC, abstractmethod
+from typing import Any, Protocol
 
-EMBEDDING_DIMENSION = 128
-TOKEN_PATTERN = re.compile(r"[a-z0-9]+")
+from openai import APITimeoutError, OpenAI, OpenAIError
 
-
-class EmbeddingProvider(ABC):
-    dimension = EMBEDDING_DIMENSION
-
-    @abstractmethod
-    def embed(self, text: str) -> list[float]:
-        raise NotImplementedError
+from app.config import (
+    OPENAI_API_KEY,
+    OPENAI_EMBEDDING_DIMENSION,
+    OPENAI_EMBEDDING_MODEL,
+    OPENAI_TIMEOUT_SECONDS,
+)
 
 
-class HashEmbeddingProvider(EmbeddingProvider):
-    """Deterministic local baseline; replace with a hosted model later."""
+class EmbeddingProvider(Protocol):
+    dimension: int
 
     def embed(self, text: str) -> list[float]:
-        vector = [0.0] * self.dimension
-        for token in TOKEN_PATTERN.findall(text.lower()):
-            digest = hashlib.sha256(token.encode("utf-8")).digest()
-            index = int.from_bytes(digest[:4], "big") % self.dimension
-            vector[index] += 1.0
-        magnitude = math.sqrt(sum(value * value for value in vector))
-        return [value / magnitude for value in vector] if magnitude else vector
+        ...
 
 
-embedding_provider: EmbeddingProvider = HashEmbeddingProvider()
+class EmbeddingError(Exception):
+    pass
+
+
+class EmbeddingNotConfiguredError(EmbeddingError):
+    pass
+
+
+class EmbeddingTimeoutError(EmbeddingError):
+    pass
+
+
+class EmbeddingProviderError(EmbeddingError):
+    pass
+
+
+class OpenAIEmbeddingProvider:
+    dimension = OPENAI_EMBEDDING_DIMENSION
+
+    def __init__(
+        self,
+        api_key: str,
+        model: str,
+        timeout_seconds: float,
+        client: Any | None = None,
+    ) -> None:
+        if not model.startswith("text-embedding-3-"):
+            raise ValueError(
+                "The configured embedding model must support the dimensions parameter."
+            )
+        self.model = model
+        self.client = client or OpenAI(api_key=api_key, timeout=timeout_seconds)
+
+    def embed(self, text: str) -> list[float]:
+        try:
+            response = self.client.embeddings.create(
+                model=self.model,
+                input=text,
+                dimensions=self.dimension,
+            )
+        except APITimeoutError as exc:
+            raise EmbeddingTimeoutError("The embedding request timed out.") from exc
+        except OpenAIError as exc:
+            raise EmbeddingProviderError("The embedding request failed.") from exc
+
+        if not response.data:
+            raise EmbeddingProviderError("The embedding provider returned no vector.")
+        vector = response.data[0].embedding
+        if len(vector) != self.dimension:
+            raise EmbeddingProviderError(
+                f"Expected {self.dimension}-dimensional embeddings, got {len(vector)}."
+            )
+        return vector
+
+
+class UnconfiguredEmbeddingProvider:
+    dimension = OPENAI_EMBEDDING_DIMENSION
+
+    def embed(self, text: str) -> list[float]:
+        raise EmbeddingNotConfiguredError(
+            "The semantic embedding provider is not configured."
+        )
+
+
+def create_embedding_provider() -> EmbeddingProvider:
+    if not OPENAI_API_KEY:
+        return UnconfiguredEmbeddingProvider()
+    return OpenAIEmbeddingProvider(
+        api_key=OPENAI_API_KEY,
+        model=OPENAI_EMBEDDING_MODEL,
+        timeout_seconds=OPENAI_TIMEOUT_SECONDS,
+    )
+
+
+embedding_provider: EmbeddingProvider = create_embedding_provider()

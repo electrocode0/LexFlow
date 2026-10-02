@@ -7,7 +7,12 @@ from pydantic import ValidationError
 
 from app.config import CORS_ORIGINS
 from app.db import get_connection
-from app.embeddings import embedding_provider
+from app.embeddings import (
+    EmbeddingNotConfiguredError,
+    EmbeddingProviderError,
+    EmbeddingTimeoutError,
+    embedding_provider,
+)
 from app.ingestion import ingest_document, vector_literal
 from app.llm import (
     LLMAnswer,
@@ -48,6 +53,23 @@ def database_error() -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         detail="Database is unavailable.",
+    )
+
+
+def embedding_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, EmbeddingNotConfiguredError):
+        return HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Semantic embedding provider is not configured.",
+        )
+    if isinstance(exc, EmbeddingTimeoutError):
+        return HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="Semantic embedding request timed out.",
+        )
+    return HTTPException(
+        status_code=status.HTTP_502_BAD_GATEWAY,
+        detail="Semantic embedding request failed.",
     )
 
 @app.get("/")
@@ -109,6 +131,8 @@ def search_contract(contract_id: UUID, q: str, limit: int = 5):
             return retrieve_contract_chunks(conn, contract_id, query, limit)
     except ContractNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Contract not found.") from exc
+    except (EmbeddingNotConfiguredError, EmbeddingTimeoutError, EmbeddingProviderError) as exc:
+        raise embedding_error(exc) from exc
     except psycopg.Error as exc:
         raise database_error() from exc
 
@@ -122,6 +146,8 @@ def ask_contract(contract_id: UUID, request: AskRequest):
             )
     except ContractNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Contract not found.") from exc
+    except (EmbeddingNotConfiguredError, EmbeddingTimeoutError, EmbeddingProviderError) as exc:
+        raise embedding_error(exc) from exc
     except psycopg.Error as exc:
         raise database_error() from exc
 
@@ -196,6 +222,8 @@ def get_contract(contract_id: UUID):
                 return contract
     except psycopg.Error as exc:
         raise database_error() from exc
+    except (EmbeddingNotConfiguredError, EmbeddingTimeoutError, EmbeddingProviderError) as exc:
+        raise embedding_error(exc) from exc
 
 
 @app.post(
@@ -241,6 +269,8 @@ async def upload_document(contract_id: UUID, file: UploadFile = File(...)):
                 document = cur.fetchone()
                 ingest_document(conn, document["id"], raw_text, embedding_provider)
                 return document
+    except (EmbeddingNotConfiguredError, EmbeddingTimeoutError, EmbeddingProviderError) as exc:
+        raise embedding_error(exc) from exc
     except psycopg.Error as exc:
         raise database_error() from exc
 

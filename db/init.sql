@@ -55,7 +55,7 @@ CREATE TABLE IF NOT EXISTS document_chunks (
     text TEXT NOT NULL,
     start_offset INTEGER NOT NULL,
     end_offset INTEGER NOT NULL,
-    embedding vector(128) NOT NULL,
+    embedding vector(1536) NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE (document_id, chunk_index)
 );

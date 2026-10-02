@@ -4,14 +4,14 @@ LexFlow is an AI-assisted contract intelligence and legal operations platform.
 
 ## Current milestone
 
-The Day 1 backend foundation now includes a tested contract and document domain API:
+The backend includes a tested contract and document domain API:
 
 - FastAPI backend with Pydantic request and response models
 - PostgreSQL-backed contract and document persistence
 - Contract creation, listing, and detail endpoints
 - UTF-8 text document upload and listing endpoints
 - Automatic paragraph-aware chunking with offsets
-- Pluggable deterministic embedding provider
+- Pluggable OpenAI semantic embedding provider (`text-embedding-3-small`, 1536 dimensions)
 - pgvector persistence and cosine-similarity retrieval
 - Contract-scoped source search with similarity scores and document metadata
 - Grounded contract Q&A with verified source citations
@@ -30,11 +30,11 @@ Authentication is intentionally deferred to a later milestone.
 FastAPI -> document ingestion -> PostgreSQL + pgvector
 
 An upload stores the original UTF-8 text and synchronously creates paragraph-aware,
-overlapping chunks. Each chunk stores source offsets and a vector from the configured
-`EmbeddingProvider` abstraction. Search embeds the query and returns contract-scoped
-source chunks ranked by cosine similarity. The current provider is deterministic and
-local so the pipeline works without an external model; a hosted provider can replace it
-without changing ingestion or retrieval.
+overlapping chunks. Each chunk stores source offsets and a 1536-dimensional vector
+from the configured `EmbeddingProvider` abstraction. The production provider calls
+OpenAI's `text-embedding-3-small`; query vectors use the same provider and model.
+Automated tests inject a deterministic fake embedding provider and never make paid
+embedding calls.
 
 `POST /contracts/{id}/ask` embeds the question, retrieves up to five chunks from
 that contract, and sends only the question and those retrieved chunk IDs/text to
@@ -46,9 +46,25 @@ follow instructions found in a document and to report insufficient evidence rath
 than use outside knowledge. This is a defense-in-depth boundary, not a guarantee
 against every model error.
 
-The production provider uses OpenAI's structured JSON output. The current local
-hash embedding provider is deterministic token-overlap similarity, not a semantic
-language embedding model.
+The production LLM provider uses OpenAI's strict structured JSON output with the
+configured `OPENAI_MODEL`. Automated tests inject a deterministic fake LLM provider.
+Production models are configured with `OPENAI_API_KEY`, `OPENAI_EMBEDDING_MODEL`,
+`OPENAI_MODEL`, and `OPENAI_TIMEOUT_SECONDS` in `.env`. Embedding storage is fixed at
+1536 dimensions; only OpenAI `text-embedding-3-*` models supporting the `dimensions`
+parameter are accepted.
+
+For an existing database created with `vector(128)`, migrate once and rebuild the
+derived chunks from preserved `documents.raw_text` values:
+
+```powershell
+Get-Content -Raw db/migrations/002_semantic_embeddings.sql | docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U lexflow -d lexflow
+python -m app.reindex_embeddings
+```
+
+The migration deletes old chunks and vectors because embeddings from different
+models or dimensions cannot be compared. It preserves contracts, documents, and
+source text; reindexing creates new chunk IDs and semantic vectors. Fresh databases
+get the current dimension from `db/init.sql` and do not need the migration.
 
 The React frontend consumes the API directly. It creates and opens contracts,
 uploads `.txt` files, submits questions, and expands citations using the exact
@@ -71,8 +87,9 @@ or citation validation itself.
 Requirements: Docker Desktop and Python 3.12 or newer.
 The frontend requires Node.js 20.19 or newer and npm.
 
-Create `.env` from `.env.example`. Set `OPENAI_API_KEY` to enable live Q&A; do not
-commit `.env`. The deterministic tests use a fake LLM provider and need no API key.
+Create `.env` from `.env.example`. Set `OPENAI_API_KEY` to enable semantic ingestion,
+retrieval, and live Q&A; do not commit `.env`. Automated tests use fake embedding and
+LLM providers and need no API key.
 The default CORS allowlist includes the local Vite origins at `localhost:5173` and
 `127.0.0.1:5173`.
 
