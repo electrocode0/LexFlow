@@ -3,7 +3,8 @@ from uuid import UUID
 from psycopg import Connection
 
 from app.chunking import chunk_text
-from app.embeddings import EmbeddingProvider
+from app.embedding_profile import ensure_embedding_profile
+from app.embeddings import EmbeddingProvider, EmbeddingProviderError
 
 
 def vector_literal(values: list[float]) -> str:
@@ -17,8 +18,15 @@ def ingest_document(
     embedding_provider: EmbeddingProvider,
 ) -> int:
     chunks = chunk_text(raw_text)
+    ensure_embedding_profile(connection, embedding_provider)
     with connection.cursor() as cursor:
         for chunk in chunks:
+            vector = embedding_provider.embed(chunk.text)
+            if len(vector) != embedding_provider.dimension:
+                raise EmbeddingProviderError(
+                    f"Expected {embedding_provider.dimension}-dimensional embeddings, "
+                    f"got {len(vector)}."
+                )
             cursor.execute(
                 """
                 INSERT INTO document_chunks
@@ -31,7 +39,7 @@ def ingest_document(
                     chunk.text,
                     chunk.start_offset,
                     chunk.end_offset,
-                    vector_literal(embedding_provider.embed(chunk.text)),
+                    vector_literal(vector),
                 ),
             )
     return len(chunks)

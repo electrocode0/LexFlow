@@ -2,7 +2,12 @@ from uuid import UUID
 
 from psycopg import Connection
 
-from app.embeddings import EmbeddingProvider, embedding_provider
+from app.embedding_profile import ensure_embedding_profile
+from app.embeddings import (
+    EmbeddingProvider,
+    EmbeddingProviderError,
+    embedding_provider,
+)
 from app.ingestion import vector_literal
 
 
@@ -17,7 +22,15 @@ def retrieve_contract_chunks(
     limit: int = 5,
     provider: EmbeddingProvider | None = None,
 ) -> list[dict]:
-    query_vector = vector_literal((provider or embedding_provider).embed(query))
+    selected_provider = provider or embedding_provider
+    ensure_embedding_profile(connection, selected_provider)
+    query_embedding = selected_provider.embed(query)
+    if len(query_embedding) != selected_provider.dimension:
+        raise EmbeddingProviderError(
+            f"Expected {selected_provider.dimension}-dimensional embeddings, "
+            f"got {len(query_embedding)}."
+        )
+    query_vector = vector_literal(query_embedding)
     with connection.cursor() as cursor:
         cursor.execute("SELECT 1 FROM contracts WHERE id = %s", (contract_id,))
         if cursor.fetchone() is None:

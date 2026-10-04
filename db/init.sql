@@ -55,10 +55,18 @@ CREATE TABLE IF NOT EXISTS document_chunks (
     text TEXT NOT NULL,
     start_offset INTEGER NOT NULL,
     end_offset INTEGER NOT NULL,
-    embedding vector(1536) NOT NULL,
+    embedding vector(768) NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE (document_id, chunk_index)
 );
 
 CREATE INDEX IF NOT EXISTS document_chunks_embedding_idx
     ON document_chunks USING hnsw (embedding vector_cosine_ops);
+
+CREATE TABLE IF NOT EXISTS embedding_configuration (
+    id SMALLINT PRIMARY KEY CHECK (id = 1),
+    provider_name TEXT NOT NULL,
+    model_name TEXT NOT NULL,
+    dimension INTEGER NOT NULL CHECK (dimension > 0),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
