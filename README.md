@@ -9,7 +9,7 @@ abstention when retrieved evidence does not support an answer.
 
 The default local AI stack uses Ollama; OpenAI is an optional hosted alternative.
 
-## Demo
+## Demo: https://youtu.be/Fz_ERbbU5KE
 
 ### Contract workspace
 
