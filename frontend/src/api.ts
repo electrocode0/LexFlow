@@ -27,6 +27,7 @@ export interface Citation {
 
 export interface AskResponse {
   answer: string;
+  answerable: boolean;
   citations: Citation[];
 }
 

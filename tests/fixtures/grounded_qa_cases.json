@@ -1,0 +1,72 @@
+[
+  {
+    "id": "governing-law",
+    "question": "What law governs this agreement?",
+    "expected_answerable": true,
+    "expected_concepts": ["Delaware"],
+    "source_evidence_phrases": ["governed by the laws of Delaware"]
+  },
+  {
+    "id": "confidentiality-obligations",
+    "question": "What confidentiality obligations does this agreement impose?",
+    "expected_answerable": true,
+    "expected_concepts": ["protect Confidential Information", "reasonable care"],
+    "source_evidence_phrases": ["protect Confidential Information using reasonable care"]
+  },
+  {
+    "id": "termination-vs-term",
+    "question": "When can this agreement be terminated?",
+    "expected_answerable": false,
+    "expected_concepts": [],
+    "source_evidence_phrases": []
+  },
+  {
+    "id": "confidential-information-definition",
+    "question": "What information is confidential?",
+    "expected_answerable": true,
+    "expected_concepts": ["non-public", "technical", "commercial"],
+    "source_evidence_phrases": ["Confidential Information means non-public technical"]
+  },
+  {
+    "id": "permitted-use",
+    "question": "How may confidential information be used?",
+    "expected_answerable": true,
+    "expected_concepts": ["solely", "evaluating a potential business relationship"],
+    "source_evidence_phrases": ["used solely for evaluating a potential business relationship"]
+  },
+  {
+    "id": "agreement-duration",
+    "question": "How long does the agreement remain effective?",
+    "expected_answerable": true,
+    "expected_concepts": ["three years"],
+    "source_evidence_phrases": ["remain effective for three years"]
+  },
+  {
+    "id": "assignment",
+    "question": "Can either party assign the agreement?",
+    "expected_answerable": true,
+    "expected_concepts": ["Neither party may assign", "prior written consent"],
+    "source_evidence_phrases": ["Neither party may assign this Agreement without prior written consent"]
+  },
+  {
+    "id": "payment-amount",
+    "question": "What is the payment amount?",
+    "expected_answerable": false,
+    "expected_concepts": [],
+    "source_evidence_phrases": []
+  },
+  {
+    "id": "indemnification",
+    "question": "Does the agreement require indemnification?",
+    "expected_answerable": false,
+    "expected_concepts": [],
+    "source_evidence_phrases": []
+  },
+  {
+    "id": "limitation-of-liability",
+    "question": "What is the limitation of liability?",
+    "expected_answerable": false,
+    "expected_concepts": [],
+    "source_evidence_phrases": []
+  }
+]

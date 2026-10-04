@@ -77,4 +77,5 @@ class Citation(BaseModel):
 
 class AskResponse(BaseModel):
     answer: str
+    answerable: bool
     citations: list[Citation]

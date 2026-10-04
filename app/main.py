@@ -13,6 +13,11 @@ from app.embeddings import (
     EmbeddingTimeoutError,
     embedding_provider,
 )
+from app.grounded_qa import (
+    ABSTENTION_ANSWER,
+    enforce_answerability,
+    has_question_relevant_passage,
+)
 from app.ingestion import ingest_document, vector_literal
 from app.llm import (
     LLMAnswer,
@@ -60,16 +65,16 @@ def embedding_error(exc: Exception) -> HTTPException:
     if isinstance(exc, EmbeddingNotConfiguredError):
         return HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Semantic embedding provider is not configured.",
+            detail=str(exc),
         )
     if isinstance(exc, EmbeddingTimeoutError):
         return HTTPException(
             status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-            detail="Semantic embedding request timed out.",
+            detail=str(exc),
         )
     return HTTPException(
         status_code=status.HTTP_502_BAD_GATEWAY,
-        detail="Semantic embedding request failed.",
+        detail=str(exc),
     )
 
 @app.get("/")
@@ -162,7 +167,7 @@ def ask_contract(contract_id: UUID, request: AskRequest):
     except LLMNotConfiguredError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Language model provider is not configured.",
+            detail=str(exc),
         ) from exc
     except (LLMTimeoutError, TimeoutError) as exc:
         raise HTTPException(
@@ -172,25 +177,24 @@ def ask_contract(contract_id: UUID, request: AskRequest):
     except (LLMProviderError, ValidationError) as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Language model returned an invalid response.",
+            detail=str(exc),
         ) from exc
 
+    answer = enforce_answerability(request.question, context, answer)
     chunks_by_id = {str(chunk["chunk_id"]): chunk for chunk in chunks}
     citations = []
+    seen_citation_ids: set[str] = set()
     for citation_id in answer.citation_ids:
-        try:
-            normalized_id = str(UUID(citation_id))
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="Language model cited an unknown source.",
-            ) from exc
+        normalized_id = str(citation_id)
         chunk = chunks_by_id.get(normalized_id)
         if chunk is None:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail="Language model cited an unknown source.",
             )
+        if normalized_id in seen_citation_ids:
+            continue
+        seen_citation_ids.add(normalized_id)
         citations.append(
             {
                 "document_id": chunk["document_id"],
@@ -199,7 +203,17 @@ def ask_contract(contract_id: UUID, request: AskRequest):
                 "text": chunk["text"],
             }
         )
-    return AskResponse(answer=answer.answer, citations=citations)
+    citations = [
+        citation
+        for citation in citations
+        if has_question_relevant_passage(request.question, [citation["text"]])
+    ]
+    answerable = answer.answerable and bool(citations)
+    return AskResponse(
+        answer=answer.answer if answerable else ABSTENTION_ANSWER,
+        answerable=answerable,
+        citations=citations,
+    )
 
 
 @app.get("/contracts/{contract_id}", response_model=ContractResponse)
@@ -308,3 +322,31 @@ def health():
         return {"status": "healthy", "database": "connected"}
     except psycopg.Error:
         return {"status": "degraded", "database": "disconnected"}
+
+
+@app.get("/health/ai")
+def ai_health():
+    llm_status = llm_provider.check_available()
+    embedding_status = embedding_provider.check_available()
+    try:
+        embedding_dimension = embedding_provider.dimension
+        dimension_error = None
+    except EmbeddingProviderError as exc:
+        embedding_dimension = None
+        dimension_error = str(exc)
+
+    if dimension_error and embedding_status["error"] is None:
+        embedding_status["error"] = dimension_error
+    return {
+        "llm": {
+            "provider": llm_provider.provider_name,
+            "model": llm_provider.model_name,
+            **llm_status,
+        },
+        "embedding": {
+            "provider": embedding_provider.provider_name,
+            "model": embedding_provider.model_name,
+            "dimension": embedding_dimension,
+            **embedding_status,
+        },
+    }

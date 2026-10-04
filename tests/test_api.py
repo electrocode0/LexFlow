@@ -36,7 +36,9 @@ import app.retrieval as retrieval
 
 
 class DeterministicFakeEmbeddingProvider:
-    dimension = 1536
+    provider_name = "test"
+    model_name = "deterministic"
+    dimension = 768
     token_pattern = re.compile(r"[a-z0-9]+")
 
     def embed(self, text):
@@ -52,6 +54,14 @@ class DeterministicFakeEmbeddingProvider:
 def database():
     try:
         with get_connection() as connection:
+            database_name = connection.execute(
+                "SELECT current_database() AS name"
+            ).fetchone()["name"]
+            if not database_name.endswith("_test"):
+                pytest.fail(
+                    "API tests require a dedicated database whose name ends in "
+                    f"'_test'; refusing to truncate {database_name!r}."
+                )
             connection.execute(Path("db/init.sql").read_text(encoding="utf-8"))
     except psycopg.OperationalError as exc:
         pytest.skip(f"PostgreSQL is unavailable: {exc}")
@@ -64,7 +74,7 @@ def clean_database(database, monkeypatch):
     monkeypatch.setattr(retrieval, "embedding_provider", fake_provider)
     with get_connection() as connection:
         connection.execute(
-            "TRUNCATE audit_events, clauses, documents, contracts CASCADE"
+            "TRUNCATE embedding_configuration, audit_events, clauses, documents, contracts CASCADE"
         )
 
 
@@ -188,7 +198,9 @@ def test_ingestion_rolls_back_when_embedding_fails(client):
                 document_id = cursor.fetchone()["id"]
 
             class FailingProvider:
-                dimension = 1536
+                provider_name = "test"
+                model_name = "failing"
+                dimension = 768
 
                 def embed(self, text):
                     raise RuntimeError("embedding failed")
@@ -207,7 +219,9 @@ def test_upload_rolls_back_when_semantic_embedding_provider_fails(
     contract_id = create_contract(client)
 
     class FailingProvider:
-        dimension = 1536
+        provider_name = "test"
+        model_name = "failing"
+        dimension = 768
 
         def embed(self, text):
             raise EmbeddingProviderError("embedding service failed")
@@ -223,6 +237,29 @@ def test_upload_rolls_back_when_semantic_embedding_provider_fails(
         assert connection.execute(
             "SELECT count(*) FROM documents WHERE file_name = 'failed.txt'"
         ).fetchone()["count"] == 0
+
+
+def test_embedding_profile_blocks_same_dimension_model_switch(client, monkeypatch):
+    contract_id = create_contract(client)
+    upload_text_document(client, contract_id, "The agreement lasts one year.")
+
+    class DifferentModelEmbeddingProvider:
+        provider_name = "test"
+        model_name = "different-model"
+        dimension = 768
+
+        def embed(self, text):
+            return [0.0] * self.dimension
+
+    monkeypatch.setattr(
+        retrieval, "embedding_provider", DifferentModelEmbeddingProvider()
+    )
+    response = client.get(
+        f"/contracts/{contract_id}/search", params={"q": "agreement term"}
+    )
+
+    assert response.status_code == 502
+    assert "python -m app.reindex_embeddings" in response.json()["detail"]
 
 
 def test_reindex_rebuilds_derived_chunks_from_preserved_document_text(
@@ -258,7 +295,7 @@ def test_reindex_rebuilds_derived_chunks_from_preserved_document_text(
         ).fetchone()["raw_text"]
     assert source == "Confidential information must be protected.\n\nThe agreement lasts three years."
     assert [chunk["text"] for chunk in stored] == [chunk["text"] for chunk in old_chunks]
-    assert all(chunk["dimensions"] == 1536 for chunk in stored)
+    assert all(chunk["dimensions"] == 768 for chunk in stored)
     assert {str(chunk["id"]) for chunk in stored}.isdisjoint(
         {str(chunk["chunk_id"]) for chunk in old_chunks}
     )
@@ -349,6 +386,7 @@ def test_ask_returns_grounded_answer_with_persisted_citation(client, fake_llm):
     )
     fake_llm.result = {
         "answer": "Each party must protect confidential information.",
+        "answerable": True,
         "citation_ids": [str(chunks[0]["chunk_id"])],
     }
 
@@ -360,6 +398,7 @@ def test_ask_returns_grounded_answer_with_persisted_citation(client, fake_llm):
     assert response.status_code == 200
     result = response.json()
     assert result["answer"] == fake_llm.result["answer"]
+    assert result["answerable"] is True
     assert result["citations"] == [
         {
             "document_id": str(chunks[0]["document_id"]),
@@ -385,6 +424,7 @@ def test_ask_supports_multiple_citations(client, fake_llm):
     cited_chunks = [first_chunks[0], second_chunks[0]]
     fake_llm.result = LLMAnswer(
         answer="The parties must protect information, and the duty survives termination.",
+        answerable=True,
         citation_ids=[str(chunk["chunk_id"]) for chunk in cited_chunks],
     )
 
@@ -408,6 +448,7 @@ def test_ask_returns_insufficient_context_without_citations(client, fake_llm):
     upload_text_document(client, contract_id, "The agreement is governed by Delaware law.")
     fake_llm.result = LLMAnswer(
         answer="The supplied contract context is insufficient to answer that question.",
+        answerable=False,
         citation_ids=[],
     )
 
@@ -417,8 +458,124 @@ def test_ask_returns_insufficient_context_without_citations(client, fake_llm):
     )
 
     assert response.status_code == 200
-    assert "insufficient" in response.json()["answer"].lower()
+    assert "do not establish" in response.json()["answer"].lower()
     assert response.json()["citations"] == []
+    assert response.json()["answerable"] is False
+
+
+def test_ask_downgrades_answer_without_citations(client, fake_llm):
+    contract_id = create_contract(client)
+    upload_text_document(client, contract_id, "Delaware law governs this agreement.")
+    fake_llm.result = LLMAnswer(
+        answer="Delaware law governs this agreement.",
+        answerable=True,
+        citation_ids=[],
+    )
+
+    response = client.post(
+        f"/contracts/{contract_id}/ask",
+        json={"question": "What law governs this agreement?"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["answerable"] is False
+    assert response.json()["answer"] == (
+        "The provided contract passages do not establish the requested information."
+    )
+
+
+def test_ask_termination_does_not_confuse_term_duration_with_termination(
+    client, fake_llm
+):
+    contract_id = create_contract(client)
+    _, chunks = upload_text_document(
+        client,
+        contract_id,
+        "This Agreement will remain effective for three years.",
+    )
+    fake_llm.result = LLMAnswer(
+        answer="This agreement may be terminated after three years.",
+        answerable=True,
+        citation_ids=[str(chunks[0]["chunk_id"])],
+    )
+
+    response = client.post(
+        f"/contracts/{contract_id}/ask",
+        json={"question": "When can this agreement be terminated?"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["answerable"] is False
+    assert response.json()["answer"] == (
+        "The provided contract passages do not establish the requested information."
+    )
+    assert len(response.json()["citations"]) == 1
+    assert "three years" in response.json()["citations"][0]["text"]
+
+
+def test_ask_abstention_never_returns_model_substantive_claim(client, fake_llm):
+    contract_id = create_contract(client)
+    _, chunks = upload_text_document(client, contract_id, "The agreement is governed by Delaware law.")
+    fake_llm.result = LLMAnswer(
+        answer="The agreement terminates after three years.",
+        answerable=False,
+        citation_ids=[str(chunks[0]["chunk_id"])],
+    )
+
+    response = client.post(
+        f"/contracts/{contract_id}/ask",
+        json={"question": "When does the agreement terminate?"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["answerable"] is False
+    assert "terminates after three years" not in response.json()["answer"]
+
+
+def test_ask_rejects_valid_but_topic_irrelevant_citation(client, fake_llm):
+    contract_id = create_contract(client)
+    _, chunks = upload_text_document(
+        client, contract_id, "This agreement is governed by Delaware law."
+    )
+    fake_llm.result = LLMAnswer(
+        answer="The agreement limits liability to fees paid.",
+        answerable=True,
+        citation_ids=[str(chunks[0]["chunk_id"])],
+    )
+
+    response = client.post(
+        f"/contracts/{contract_id}/ask",
+        json={"question": "What is the limitation of liability?"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["answerable"] is False
+    assert response.json()["answer"] == (
+        "The provided contract passages do not establish the requested information."
+    )
+    assert response.json()["citations"] == []
+
+
+def test_ask_deduplicates_repeated_valid_citation_ids(client, fake_llm):
+    contract_id = create_contract(client)
+    _, chunks = upload_text_document(
+        client, contract_id, "This Agreement shall be governed by Delaware law."
+    )
+    chunk_id = str(chunks[0]["chunk_id"])
+    fake_llm.result = LLMAnswer(
+        answer="Delaware law governs.",
+        answerable=True,
+        citation_ids=[chunk_id, chunk_id],
+    )
+
+    response = client.post(
+        f"/contracts/{contract_id}/ask",
+        json={"question": "What law governs this agreement?"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["answerable"] is True
+    assert len(response.json()["citations"]) == 1
 
 
 def test_ask_nonexistent_contract_returns_404_without_calling_provider(client, fake_llm):
@@ -445,7 +602,11 @@ def test_ask_rejects_empty_or_invalid_question(client, fake_llm, payload):
 def test_ask_rejects_malformed_provider_output(client, fake_llm):
     contract_id = create_contract(client)
     upload_text_document(client, contract_id, "The agreement uses reasonable care.")
-    fake_llm.result = {"answer": "Maybe.", "citation_ids": "not-an-array"}
+    fake_llm.result = {
+        "answer": "Maybe.",
+        "answerable": True,
+        "citation_ids": "not-an-array",
+    }
 
     response = client.post(
         f"/contracts/{contract_id}/ask", json={"question": "What standard applies?"}
@@ -459,6 +620,7 @@ def test_ask_hard_fails_hallucinated_citation_id(client, fake_llm):
     upload_text_document(client, contract_id, "The agreement uses reasonable care.")
     fake_llm.result = LLMAnswer(
         answer="The agreement uses reasonable care.",
+        answerable=True,
         citation_ids=[str(uuid4())],
     )
 
@@ -472,7 +634,7 @@ def test_ask_hard_fails_hallucinated_citation_id(client, fake_llm):
 
 def test_openai_embedding_provider_requests_configured_model_and_dimensions():
     response = SimpleNamespace(
-        data=[SimpleNamespace(embedding=[0.25] * 1536)],
+        data=[SimpleNamespace(embedding=[0.25] * 768)],
         usage=SimpleNamespace(prompt_tokens=3, total_tokens=3),
     )
 
@@ -493,11 +655,11 @@ def test_openai_embedding_provider_requests_configured_model_and_dimensions():
 
     vector = provider.embed("semantic test")
 
-    assert len(vector) == 1536
+    assert len(vector) == 768
     assert fake_embeddings.request == {
         "model": "text-embedding-3-small",
         "input": "semantic test",
-        "dimensions": 1536,
+        "dimensions": 768,
     }
 
 
@@ -515,7 +677,7 @@ def test_openai_embedding_provider_rejects_dimension_mismatch():
         ),
     )
 
-    with pytest.raises(EmbeddingProviderError, match="Expected 1536"):
+    with pytest.raises(EmbeddingProviderError, match="Expected 768"):
         provider.embed("dimension check")
 
 
@@ -556,6 +718,7 @@ def test_prompt_injection_in_document_is_untrusted_context(client, monkeypatch):
                     content=json.dumps(
                         {
                             "answer": "Each party must use reasonable care.",
+                            "answerable": True,
                             "citation_ids": [str(chunks[0]["chunk_id"])],
                         }
                     ),
@@ -595,3 +758,29 @@ def test_prompt_injection_in_document_is_untrusted_context(client, monkeypatch):
         {"chunk_id": str(chunks[0]["chunk_id"]), "text": injected_text}
     ]
     assert fake_completions.request["response_format"]["json_schema"]["strict"] is True
+
+
+def test_ai_health_reports_selected_providers_without_secrets(client, monkeypatch):
+    class StatusProvider:
+        provider_name = "ollama"
+        model_name = "local-test"
+        dimension = 768
+
+        def check_available(self):
+            return {
+                "available": True,
+                "model_available": True,
+                "error": None,
+            }
+
+    monkeypatch.setattr(main, "llm_provider", StatusProvider())
+    monkeypatch.setattr(main, "embedding_provider", StatusProvider())
+
+    response = client.get("/health/ai")
+
+    assert response.status_code == 200
+    result = response.json()
+    assert result["llm"]["provider"] == "ollama"
+    assert result["llm"]["model"] == "local-test"
+    assert result["embedding"]["dimension"] == 768
+    assert "api_key" not in json.dumps(result).lower()
