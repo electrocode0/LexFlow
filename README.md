@@ -13,7 +13,7 @@ The default local AI stack uses Ollama; OpenAI is an optional hosted alternative
 
 ### Contract workspace
 
-Contract details, uploaded source files, and the question panel.
+Landing Page. Access: Contract details, uploaded source files, and the question panel.
 
 ![LexFlow contract workspace](docs/images/lexflow-workspace.png)
 
