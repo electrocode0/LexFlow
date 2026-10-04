@@ -1,289 +1,287 @@
 # LexFlow
 
-LexFlow is an AI-assisted contract intelligence and legal operations platform.
+**LexFlow turns contract documents into source-grounded answers with citations that are checked against the stored document passages.**
 
-## Current milestone
+LexFlow is a full-stack legal AI and contract-intelligence portfolio project. It
+combines semantic retrieval with a pluggable LLM layer so users can ask questions
+about a contract, inspect the passages behind an answer, and see an explicit
+abstention when retrieved evidence does not support an answer.
 
-The backend includes a tested contract and document domain API:
+The default local AI stack uses Ollama; OpenAI is an optional hosted alternative.
 
-- FastAPI backend with Pydantic request and response models
-- PostgreSQL-backed contract and document persistence
-- Contract creation, listing, and detail endpoints
-- UTF-8 text document upload and listing endpoints
-- Automatic paragraph-aware chunking with offsets
-- Provider-neutral LLM and embedding interfaces with Ollama and OpenAI implementations
-- Ollama local chat and embeddings as the default, with no API key required
-- OpenAI as an optional hosted provider; LLM and embedding providers can be mixed
-- pgvector persistence and cosine-similarity retrieval
-- Contract-scoped source search with similarity scores and document metadata
-- Grounded contract Q&A with verified source citations
-- Explicit answerability in grounded Q&A, with conservative abstention for unsupported answers
-- Structured LLM output validated by Pydantic before it reaches LexFlow services
-- AI provider health diagnostics that report provider/model availability without secrets
-- React and TypeScript contract dashboard and workspace
-- Click-through source citations with highlighted backend-returned passages
-- Transaction-safe database operations and database health monitoring
-- Docker Compose development environment
-- PostgreSQL schema initialized from `db/init.sql`
-- Pytest integration coverage for the API and database behavior
+## Demo
 
-Authentication is intentionally deferred to a later milestone.
+Screenshots are intentionally not included yet. Add genuine captures of the
+running application at these paths when available:
+
+<!-- Screenshot placeholder: capture the dashboard and an open contract workspace.
+     Save as docs/images/contract-workspace.png. -->
+
+**Contract workspace** — contract details, uploaded source files, and the question panel.
+
+<!-- Screenshot placeholder: capture a grounded answer with its answerability state.
+     Save as docs/images/grounded-answer.png. -->
+
+**Grounded answer** — an answer generated from retrieved contract passages.
+
+<!-- Screenshot placeholder: expand a citation to show the returned source passage.
+     Save as docs/images/verified-citation.png. -->
+
+**Verified citation and source passage** — the cited chunk displayed in context.
+
+<!-- Screenshot placeholder: capture an unsupported question and the abstention response.
+     Save as docs/images/unsupported-abstention.png. -->
+
+**Unsupported-question abstention** — the API declines to provide a substantive answer
+when its safeguards do not find sufficient cited support.
+
+## Why LexFlow
+
+Language models can produce plausible-sounding legal answers even when a contract
+does not support them. A citation that points to a real passage is not, by itself,
+proof that the passage supports the answer.
+
+LexFlow addresses this engineering problem with a traceable Q&A pipeline:
+
+1. Preserve uploaded text and split it into chunks with source offsets.
+2. Embed the chunks and retrieve relevant passages within the selected contract.
+3. Ask a configured LLM to answer from those passages and return structured
+   answerability and citation data.
+4. Validate the structured response and resolve proposed citation IDs against the
+   retrieved chunks.
+5. Return the matching source passages, or abstain when safeguards reject the answer.
+
+This is a defense-in-depth design, not a guarantee of legal correctness.
 
 ## Architecture
 
-FastAPI -> provider interfaces -> Ollama (default) or OpenAI (optional)
-        -> document ingestion -> PostgreSQL + pgvector
+```mermaid
+flowchart TD
+    D[Document] --> C[Chunking with source offsets]
+    C --> E[Embedding provider]
+    E --> V[(PostgreSQL + pgvector)]
+    Q[Question] --> R[Contract-scoped semantic retrieval]
+    V --> R
+    R --> G[Grounded LLM generation]
+    G --> A[Structured answer + answerability + proposed chunk IDs]
+    A --> X[Citation and answerability safeguards]
+    X --> S[Verified source passages]
 
-An upload stores the original UTF-8 text and synchronously creates paragraph-aware,
-overlapping chunks. Each chunk stores source offsets and a 768-dimensional vector
-from the configured `EmbeddingProvider` abstraction. Ollama's default
-`nomic-embed-text` model reports a 768-dimensional embedding. OpenAI
-`text-embedding-3-small` is configured to return 768 dimensions as well. Query and
-document vectors must use the same provider/model profile.
+    subgraph Embeddings
+        EO[Ollama embeddings - default]
+        EP[OpenAI embeddings - optional]
+    end
+    subgraph Language models
+        LO[Ollama LLM - default]
+        LP[OpenAI LLM - optional]
+    end
+    EO --> E
+    EP --> E
+    LO --> G
+    LP --> G
+```
 
-`POST /contracts/{id}/ask` embeds the question, retrieves up to five chunks from
-that contract, and sends only the question and those retrieved chunk IDs/text to
-the configured LLM provider. The provider must return strict structured output
-containing an answer and citation IDs. The API maps citations to the retrieved
-database rows and rejects unknown IDs instead of returning model-invented sources.
-The response includes `answerable`; an absent citation set is downgraded to an
-abstention, and termination questions are not answered from term-duration text
-unless the supplied passages state a termination procedure. Valid citations alone
-do not prove that an answer is correct.
-Document text is untrusted data: the system prompt instructs the model never to
-follow instructions found in a document and to report insufficient evidence rather
-than use outside knowledge. This is a defense-in-depth boundary, not a guarantee
-against every model error.
+The backend is built with FastAPI. PostgreSQL stores contracts, original document
+text, chunks, source offsets, and pgvector embeddings. The React/TypeScript
+frontend calls the API and displays returned citations; retrieval and citation
+validation remain backend responsibilities.
 
-Both providers implement the same structured-output contract. OpenAI uses strict
-JSON Schema responses; Ollama uses its local chat API's JSON Schema `format`.
-LexFlow validates the returned JSON against the requested Pydantic model, then
-validates citations against retrieved database rows. Provider-specific errors
-(including a missing Ollama model) are surfaced as actionable API errors rather than
-being replaced with fabricated answers. Automated tests use deterministic fake
-providers and mocked Ollama HTTP responses; they do not make paid or live-model
-requests.
+Provider choice is environment-configured. LLM and embedding providers can be
+selected independently. Embedding profiles record provider, model, and vector
+dimension; changing embedding models requires reindexing documents before
+retrieval.
 
-The `embedding_configuration` row records the active provider, model, and vector
-dimension. Upload and retrieval reject a different profile, even when its vector
-dimension happens to match. Reindexing is an explicit, transactional operation that
-deletes and rebuilds derived chunks/vectors from preserved `documents.raw_text`.
-Changing embedding provider/model requires reindexing; it creates new chunk IDs.
+## Features
 
-For an existing database using the earlier `vector(1536)` schema, migrate once and
-rebuild the derived chunks:
+### Implemented
+
+- Contract creation, listing, and detail API.
+- UTF-8 text document upload and listing.
+- Paragraph-aware chunking with source offsets.
+- Configurable embedding and LLM provider interfaces.
+- Ollama as the default local inference option; OpenAI as an optional hosted provider.
+- Independent provider selection, including mixed local/hosted configurations.
+- PostgreSQL and pgvector storage with contract-scoped semantic search.
+- Grounded Q&A using structured model output and an explicit `answerable` result.
+- Citation IDs checked against retrieved chunks, with source passages returned to
+  the frontend.
+- Conservative abstention safeguards, including a guard against treating contract
+  duration as a termination right.
+- AI provider health diagnostics at `GET /health/ai`.
+- A small fixture-based evaluation harness and automated backend tests.
+- Docker Compose development stack.
+
+### Not implemented yet
+
+Structured clause extraction, normalized contract terms, playbooks, deviation
+analysis, and a human review/audit workflow are roadmap items, not current
+capabilities.
+
+## Trust and Grounding
+
+- **Answerability:** the model response includes an answerability flag. The API
+  downgrades answers that fail its conservative safeguards, including answers
+  without an acceptable citation.
+- **Verified chunk IDs:** citation IDs must resolve to chunks retrieved for the
+  current contract question. Unknown IDs are rejected; they are not treated as
+  source evidence.
+- **Source provenance:** returned citations contain persisted chunk text. Chunks
+  retain document-relative start and end offsets so their text can be checked
+  against the original stored document.
+- **Abstention:** unsupported or insufficiently cited answers are replaced with
+  an explicit statement that the supplied passages do not establish the requested
+  information.
+- **Provider independence:** grounding instructions, answerability checks, and
+  citation resolution are LexFlow responsibilities shared across configured LLM
+  providers.
+
+The current relevance and termination safeguards are conservative heuristics, not
+a semantic entailment engine. Valid citations and abstention behavior reduce
+specific failure modes but do not guarantee that all answers are correct or
+constitute legal advice.
+
+## Evaluation
+
+The evaluation fixture is
+[`tests/fixtures/grounded_qa_cases.json`](tests/fixtures/grounded_qa_cases.json).
+It contains ten concept-based cases against `sample_nda.txt`: six supported
+questions and four unsupported questions. The live harness isolates retrieval to
+that named document, even if other documents are attached to the contract.
+Production retrieval remains contract-scoped.
+
+Run the harness against an uploaded sample NDA using Ollama:
 
 ```powershell
-docker compose stop backend
-Get-Content -Raw db/migrations/003_embedding_provider_profile.sql | docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U lexflow -d lexflow
-docker compose up -d --build backend
+python -m scripts.evaluate_grounded_qa --contract-id <contract-uuid> --models llama3.2:3b
+```
+
+It reports retrieval evidence coverage, concept coverage, answerability and
+abstention, citation relevance and ID validity, source-offset checks, structured
+output success, and generation latency. The benchmark is small and useful for
+regression/evaluation work; it is **not** evidence of production legal accuracy.
+
+## Technology
+
+- Python, FastAPI, Pydantic
+- PostgreSQL, pgvector
+- React, TypeScript, Vite
+- Ollama local inference
+- Optional OpenAI LLM and embedding providers
+- Docker Compose
+- Pytest
+
+## Running Locally
+
+Prerequisites: Docker Desktop with Compose, Ollama, Node.js 20.19+ and npm.
+
+1. Install/start Ollama, then download the default local models:
+
+   ```powershell
+   ollama pull llama3.2:3b
+   ollama pull nomic-embed-text
+   ollama list
+   ```
+
+2. From the repository root, start PostgreSQL and the API:
+
+   ```powershell
+   docker compose up -d --build
+   ```
+
+   Compose configures the backend to reach host-running Ollama at
+   `http://host.docker.internal:11434` by default. If needed, set
+   `OLLAMA_DOCKER_BASE_URL` in `.env` to the Ollama address reachable from Docker.
+
+3. Confirm API and provider status:
+
+   ```powershell
+   Invoke-RestMethod http://127.0.0.1:8000/health
+   Invoke-RestMethod http://127.0.0.1:8000/health/ai
+   ```
+
+4. In a second terminal, start the frontend:
+
+   ```powershell
+   Set-Location frontend
+   npm install
+   npm run dev
+   ```
+
+   Open <http://127.0.0.1:5173>. Create a contract, upload a `.txt` agreement,
+   ask a question, and expand a returned citation to inspect its source passage.
+   API documentation is available at <http://127.0.0.1:8000/docs>.
+
+### Optional OpenAI provider
+
+Create a local `.env` from `.env.example`, set `OPENAI_API_KEY` locally, and
+select OpenAI for one or both provider types. Do not commit `.env` or API keys.
+
+```dotenv
+# Default local configuration
+LLM_PROVIDER=ollama
+EMBEDDING_PROVIDER=ollama
+
+# Hosted providers
+LLM_PROVIDER=openai
+EMBEDDING_PROVIDER=openai
+OPENAI_API_KEY=your-key
+
+# Mixed configurations are also supported
+LLM_PROVIDER=openai
+EMBEDDING_PROVIDER=ollama
+```
+
+The reverse mixed configuration (`LLM_PROVIDER=ollama` with
+`EMBEDDING_PROVIDER=openai`) is supported too. If the embedding provider or model
+changes, reindex existing documents before searching:
+
+```powershell
 docker compose exec backend python -m app.reindex_embeddings
 ```
 
-The migration removes incompatible vectors/chunks and preserves contracts,
-documents, and original source text. Fresh databases get the current dimension and
-profile table from `db/init.sql` and do not need this migration.
-Databases still on `vector(128)` must first apply
-`db/migrations/002_semantic_embeddings.sql`, then apply migration 003 above.
-For existing documents, install/pull the selected embedding model and confirm it
-is available before reindexing; otherwise the reindex transaction will fail and
-roll back.
+The reindex operation rebuilds derived chunks and vectors from stored source text.
 
-The React frontend consumes the API directly. It creates and opens contracts,
-uploads `.txt` files, submits questions, and expands citations using the exact
-source text returned by the backend. It does not implement ingestion, retrieval,
-or citation validation itself.
+## Tests
 
-## API endpoints
-
-- `POST /contracts` creates a contract.
-- `GET /contracts` lists contracts.
-- `GET /contracts/{id}` returns one contract.
-- `POST /contracts/{id}/documents` uploads a UTF-8 text document.
-- `GET /contracts/{id}/documents` lists documents for a contract.
-- `GET /contracts/{id}/search?q=...` retrieves ranked source chunks.
-- `POST /contracts/{id}/ask` answers from retrieved contract chunks with citations.
-- `GET /health` checks database connectivity.
-- `GET /health/ai` reports selected providers/models, embedding dimension, and model
-  availability without exposing credentials.
-
-## Development setup
-
-Requirements: Docker Desktop and Python 3.12 or newer.
-The frontend requires Node.js 20.19 or newer and npm.
-
-### OLLAMA — DEFAULT / FREE LOCAL DEVELOPMENT
-
-Install Ollama for Windows from <https://ollama.com/download>, then pull the
-configured models from PowerShell:
+Run the suite against a dedicated PostgreSQL database whose name ends in `_test`;
+the API test fixture refuses to truncate other databases. With the Compose
+PostgreSQL service running, create the test database once:
 
 ```powershell
-ollama pull llama3.2:3b
-ollama pull nomic-embed-text
-ollama list
+docker compose exec postgres psql -U lexflow -d postgres -c "CREATE DATABASE lexflow_test"
 ```
 
-Ollama must be running on the host. For a backend started directly on Windows,
-`OLLAMA_BASE_URL=http://localhost:11434` is the default. The Compose backend uses
-`http://host.docker.internal:11434` to reach Ollama on the Docker Desktop host; set
-`OLLAMA_DOCKER_BASE_URL` if your Docker setup requires a different host address.
-The backend does not start or manage Ollama.
-
-### OPENAI — OPTIONAL HOSTED PROVIDER
-
-Create `.env` from `.env.example`. OpenAI is optional: only set `OPENAI_API_KEY`
-when selecting an OpenAI provider. Never commit `.env`. Providers are selected
-independently, so mixed configurations are supported:
-
-```dotenv
-# Local (default)
-LLM_PROVIDER=ollama
-EMBEDDING_PROVIDER=ollama
-
-# Hosted
-LLM_PROVIDER=openai
-EMBEDDING_PROVIDER=openai
-OPENAI_API_KEY=your-key
-
-# Mixed
-LLM_PROVIDER=openai
-EMBEDDING_PROVIDER=ollama
-
-# Mixed (reverse)
-LLM_PROVIDER=ollama
-EMBEDDING_PROVIDER=openai
-OPENAI_API_KEY=your-key
-```
-
-Automated tests use fakes/mocks and need neither Ollama nor an API key.
-The default CORS allowlist includes the local Vite origins at `localhost:5173` and
-`127.0.0.1:5173`.
-
-The Compose database uses `pgvector/pgvector:pg16`. Fresh databases initialize
-from `db/init.sql`; existing volumes need the migration above when moving from the
-previous 1536-dimensional schema.
-
-Start the services (this preserves existing database volumes):
+For the local Compose development database, run:
 
 ```powershell
-docker compose up -d --build
+# Replace these placeholders with your local PostgreSQL credentials.
+$env:DATABASE_URL = "postgresql://<user>:<password>@localhost:5432/lexflow_test"
+python -m pytest -q
 ```
 
-Check provider/model status at <http://127.0.0.1:8000/health/ai>. The frontend is
-not required for the provider smoke test; Swagger UI is available at
-<http://127.0.0.1:8000/docs>.
-
-Install Python dependencies:
-
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
-```
-
-Run the API locally:
-
-```powershell
-uvicorn app.main:app --reload
-```
-
-Run the frontend in a second terminal:
+Do not commit real credentials. Update the connection string if you customize
+the Compose database configuration.
+The automated tests use fake providers and mocked provider HTTP responses; they
+do not require Ollama inference or paid OpenAI API access. To verify the frontend:
 
 ```powershell
 Set-Location frontend
-Copy-Item .env.example .env.local
-npm install
-npm run dev
-```
-
-Open http://127.0.0.1:5173. Set `VITE_API_BASE_URL` in `frontend/.env.local` to
-change the API origin. Frontend checks:
-
-```powershell
-npm run lint
 npm run typecheck
-npm run build
 ```
 
-Run the full test suite:
+## Roadmap
 
-```powershell
-$env:DATABASE_URL = "postgresql://lexflow:lexflow_dev@localhost:5432/lexflow_test"
-docker compose exec postgres psql -U lexflow -d postgres -c "CREATE DATABASE lexflow_test"
-pytest -q
-```
+- Structured clause extraction with document/chunk provenance.
+- Normalized contract terms.
+- Company playbooks and configurable positions.
+- Deviation analysis and risk/issue flags.
+- Human review, correction, and acceptance workflow.
+- Audit trail for review decisions.
 
-The API test fixture refuses to truncate a database whose name does not end in
-`_test`. The development database is not a test database.
+These items are planned work and are not represented as implemented features.
 
-API documentation: http://127.0.0.1:8000/docs
+## Disclaimer
 
-### Grounded-Q&A evaluation
-
-The deterministic evaluation cases live in
-`tests/fixtures/grounded_qa_cases.json`. They grade concepts and answerability,
-not exact prose. The live evaluation resolves `sample_nda.txt` within the chosen
-contract and retrieves only that document's chunks; other documents attached to
-the contract cannot affect benchmark context. This evaluation-only filter does
-not change production retrieval, which remains contract-scoped. To evaluate local
-Ollama models (after database migration/reindexing), run:
-
-```powershell
-python -m scripts.evaluate_grounded_qa --contract-id <contract-uuid>
-```
-
-The default comparison uses `llama3.2:3b`, `phi:latest`, and `mistral:latest`;
-all use the configured embedding model and the same NDA-only retrieved chunks. The report
-includes retrieval ranking/similarity/source offsets, passage coverage, answer
-concept coverage, answerability and abstention scores, citation relevance and
-source-offset checks, structured-output success, and latency. Evaluation is
-diagnostic and does not establish production legal reliability.
-
-### Manual Ollama smoke test
-
-After installing Ollama and pulling the models above:
-
-1. Start PostgreSQL and LexFlow with `docker compose up -d --build` (or start
-   PostgreSQL with Compose and run `uvicorn app.main:app --reload` in the local
-   virtual environment).
-2. Open `/health/ai` and confirm the selected Ollama models are available.
-3. Create a contract:
-
-   ```powershell
-   $contract = Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/contracts -ContentType 'application/json' -Body '{"title":"Sample NDA"}'
-   $contractId = $contract.id
-   ```
-
-4. Upload the included test agreement:
-
-   ```powershell
-   curl.exe -s -X POST "http://127.0.0.1:8000/contracts/$contractId/documents" -F "file=@samples/sample_nda.txt;type=text/plain"
-   ```
-
-   Upload synchronously creates chunks and embeddings. Confirm the response is
-   successful and inspect the stored source at
-   `GET /contracts/{contractId}/documents`.
-5. Run contract-scoped retrieval:
-
-   ```powershell
-   Invoke-RestMethod -Uri "http://127.0.0.1:8000/contracts/$contractId/search?q=confidentiality%20obligations"
-   ```
-
-6. Ask a grounded question:
-
-   ```powershell
-   $answer = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/contracts/$contractId/ask" -ContentType 'application/json' -Body '{"question":"What confidentiality obligations does the agreement impose?"}'
-   $answer | ConvertTo-Json -Depth 8
-   ```
-
-7. Verify each returned `citations[].text` against the uploaded document returned
-   from `GET /contracts/{contractId}/documents`. The API resolves citation IDs to
-   persisted retrieved chunks; it rejects IDs that were not retrieved. Do not treat
-   this manual smoke test as passed until the requests have been run against your
-   local Ollama installation.
-
-If embeddings are switched after uploading documents, run
-`python -m app.reindex_embeddings` from the local environment, or
-`docker compose exec backend python -m app.reindex_embeddings` for the Compose
-backend, before searching. The database rejects use of vectors associated with a
-different provider/model profile.
+LexFlow is an engineering and portfolio project for demonstrating full-stack
+software and grounded-AI design. It is not legal advice, does not replace a
+qualified lawyer, and should not be used as the sole basis for legal decisions.
