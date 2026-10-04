@@ -11,29 +11,30 @@ The default local AI stack uses Ollama; OpenAI is an optional hosted alternative
 
 ## Demo
 
-Screenshots are intentionally not included yet. Add genuine captures of the
-running application at these paths when available:
+### Contract workspace
 
-<!-- Screenshot placeholder: capture the dashboard and an open contract workspace.
-     Save as docs/images/contract-workspace.png. -->
+Contract details, uploaded source files, and the question panel.
 
-**Contract workspace** — contract details, uploaded source files, and the question panel.
+![LexFlow contract workspace](docs/images/lexflow-workspace.png)
 
-<!-- Screenshot placeholder: capture a grounded answer with its answerability state.
-     Save as docs/images/grounded-answer.png. -->
+### Grounded answer
 
-**Grounded answer** — an answer generated from retrieved contract passages.
+An answer generated from retrieved contract passages.
 
-<!-- Screenshot placeholder: expand a citation to show the returned source passage.
-     Save as docs/images/verified-citation.png. -->
+![LexFlow grounded answer](docs/images/grounded-answer.png)
 
-**Verified citation and source passage** — the cited chunk displayed in context.
+### Verified citation and source passage
 
-<!-- Screenshot placeholder: capture an unsupported question and the abstention response.
-     Save as docs/images/unsupported-abstention.png. -->
+The cited chunk displayed as supporting source text.
 
-**Unsupported-question abstention** — the API declines to provide a substantive answer
-when its safeguards do not find sufficient cited support.
+![Verified citation with source passage](docs/images/verified-citation.png)
+
+### Unsupported-question abstention
+
+An example of the API declining to provide a substantive answer when safeguards
+do not find sufficient cited support.
+
+![LexFlow abstaining on an unsupported question](docs/images/abstention.png)
 
 ## Why LexFlow
 
